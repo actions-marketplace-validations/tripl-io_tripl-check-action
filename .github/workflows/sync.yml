@@ -1,0 +1,48 @@
+# Follows tripl's CLI releases: each cli-vX.Y.Z tag of tripl-io/tripl that
+# holds ci/github/action.yml becomes action.yml here, tagged vX.Y.Z (and vX.Y
+# moved onto it), with a GitHub release. See .github/sync.sh.
+name: Follow tripl releases
+
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # every tag: the newest one is what is already mirrored
+      - name: Mirror new releases
+        id: sync
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          before="$(git tag --list 'v*.*.*' | sort -V | tail -1)"
+          .github/sync.sh
+          after="$(git tag --list 'v*.*.*' | sort -V | tail -1)"
+          { echo "before=$before"; echo "after=$after"; } >> "$GITHUB_OUTPUT"
+      - name: Release each new tag
+        if: steps.sync.outputs.after != steps.sync.outputs.before
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ steps.sync.outputs.before }}
+        run: |
+          for tag in $(git tag --list 'v*.*.*' | sort -V); do
+            if [[ -n "$BEFORE" && "$(printf '%s\n%s\n' "$BEFORE" "$tag" | sort -V | tail -1)" == "$BEFORE" ]]; then
+              continue
+            fi
+            version="${tag#v}"
+            gh release create "$tag" --verify-tag --title "tripl check $version" --notes \
+              "Runs tripl $version. Changes: https://github.com/tripl-io/tripl/releases/tag/v$version"
+          done
